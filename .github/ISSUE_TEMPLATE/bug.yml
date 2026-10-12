@@ -1,0 +1,18 @@
+name: 使用问题
+description: 报告安装、阅读或操作问题
+body:
+  - type: textarea
+    attributes:
+      label: 发生了什么
+      description: 操作步骤、期望和实际结果；不要粘贴私人原文或密钥。
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: 环境
+      description: 插件、系统、Obsidian 和 Python 版本。
+  - type: textarea
+    attributes:
+      label: 截图或已脱敏的错误
+      description: 先遮去头像、私人正文、用户名和路径。
+

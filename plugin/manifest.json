@@ -1,0 +1,9 @@
+{
+  "id": "yl-knowledge-workbench",
+  "name": "知识工作台",
+  "version": "0.3.0",
+  "minAppVersion": "1.5.0",
+  "description": "本地知识阅读、表达资产、作品资料库与选题工作台。支持当前 Obsidian 库及 YL 知识体系。",
+  "author": "YL",
+  "isDesktopOnly": true
+}

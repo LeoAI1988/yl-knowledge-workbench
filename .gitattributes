@@ -1,0 +1,4 @@
+# Preserve release-source bytes across Windows and Linux checkouts.
+* -text
+*.jpg binary
+

@@ -1,0 +1,20 @@
+{
+  "name": "yl-knowledge-workbench",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "@xyflow/react": "^12.10.0",
+    "lucide-react": "^0.468.0",
+    "marked": "^15.0.0",
+    "dompurify": "^3.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
