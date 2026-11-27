@@ -2,8 +2,8 @@
 from pathlib import Path
 import hashlib,io,json,zipfile
 HERE=Path(__file__).resolve().parent
-BACKEND=('server.py','knowledge.py','markdown_vault.py','astra.py')
-DIST=('index.html','main.js','main.css')
+BACKEND=('server.py','knowledge.py','markdown_vault.py','personal_library.py','library_browse.py','reading_info.py','publication.py','astra.py','qa_evidence.py')
+DIST=('index.html','main.js','main.css','personal-library.html','personal-library.js','workbench-route.js')
 PLUGIN=('manifest.json','main.js','styles.css')
 
 def payload():

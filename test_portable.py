@@ -1,5 +1,6 @@
 """Portable-vault contract: isolated files, explicit types, no model calls."""
 import json,tempfile,unittest
+from unittest.mock import patch
 from pathlib import Path
 from markdown_vault import MarkdownVault
 from server import App
@@ -48,6 +49,15 @@ class PortableTests(unittest.TestCase):
         config['workbench']['name']='测试助手';self.profile.write_text(json.dumps(config),'utf-8')
         app.post('/api/reload',{})
         self.assertEqual(app.get('/api/bootstrap')['identity']['name'],'测试助手')
+    def test_model_provider_requires_explicit_selection(self):
+        with patch.dict('os.environ',{'OPENAI_API_KEY':'fixture'}):
+            app=App(self.profile)
+            self.assertEqual(app.astra.provider,'local_codex')
+            cfg=json.loads(self.profile.read_text('utf-8'))
+            cfg['workbench']['provider']='openai_api'
+            self.profile.write_text(json.dumps(cfg),'utf-8')
+            app.post('/api/reload',{})
+            self.assertEqual(app.astra.provider,'openai_api')
     def test_model_and_exclusions_refresh_and_busy_refusal(self):
         self.note('exclude/a.md','# 资料\n不再检索')
         app=App(self.profile);config=json.loads(self.profile.read_text('utf-8'))

@@ -25,7 +25,8 @@ class WorkbenchView extends ItemView{
     try{
      const uri=new URL(event.data.uri);if(uri.protocol!=='obsidian:'||uri.hostname!=='open'||uri.searchParams.get('vault')!==this.app.vault.getName())return;
      const file=uri.searchParams.get('file');if(!file||file.split(/[\\/]/).includes('..')||file.startsWith('/')||file.includes(':'))return;
-     const abstract=this.app.vault.getAbstractFileByPath(file);if(abstract?.extension==='md')this.app.workspace.getLeaf('tab').openFile(abstract);
+     const target=this.app.vault.getAbstractFileByPath(file)||this.app.vault.getAbstractFileByPath(file+'.md');
+     if(target&&['md','canvas'].includes(target.extension))this.app.workspace.getLeaf('tab').openFile(target);
     }catch{new Notice('原文件无法打开。')}
    };window.addEventListener('message',this.listener);
   }catch(e){loading.textContent='工作台暂未启动：'+e.message;this.contentEl.createEl('button',{text:'重新连接'}).onclick=()=>this.onOpen()}
@@ -44,7 +45,8 @@ class WorkbenchSettings extends PluginSettingTab{
  display(){
   const el=this.containerEl;el.empty();el.createEl('h2',{text:'知识工作台'});
   el.createEl('p',{text:'读取当前 Obsidian 库。原文、头像、对话和个人设置保存在本机；调用模型时会发送所需材料。名称与头像修改后点击下方“应用并打开”。Python 路径在服务下次启动时生效。'});
-  const fields=[['python','Python 路径','Python 3.12 或以上，需安装 PyYAML；Windows 自动使用无窗口运行方式。'],['name','助手名称','使用自己的名称；留空显示“我的知识助手”。'],['model','Codex 模型 ID','填写你账号可用的模型 ID；留空使用 gpt-6-astra，修改后点击应用。'],['avatar','头像路径','可选，选择本机图片的完整路径。'],['profilePath','已有知识库配置','已有 YL 知识库可指定 profile.json；一般用户留空即可。']];
+  new Setting(el).setName('生成服务').setDesc('生成时发送本次问题、参考段落和近期对话。默认使用已登录的本机 Codex；选择官方 API 后使用你配置的项目额度。').addDropdown(d=>d.addOption('local_codex','本机 Codex').addOption('openai_api','OpenAI API').setValue(this.plugin.settings.provider||this.plugin.config?.profile?.workbench?.provider||'local_codex').onChange(async value=>{this.plugin.settings.provider=value;await this.plugin.saveData(this.plugin.settings)}));
+  const fields=[['python','Python 路径','Python 3.12 或以上，需安装 PyYAML；Windows 自动使用无窗口运行方式。'],['name','助手名称','使用自己的名称；留空显示“我的知识助手”。'],['model','模型 ID','填写所选服务支持的模型 ID，修改后点击应用。'],['avatar','头像路径','可选，选择本机图片的完整路径。'],['profilePath','已有知识库配置','已有 YL 知识库可指定 profile.json；一般用户留空即可。']];
   for(const [key,label,desc] of fields)new Setting(el).setName(label).setDesc(desc).addText(t=>t.setValue(this.plugin.settings[key]??this.plugin.config?.profile?.workbench?.[key]??'').onChange(async v=>{this.plugin.settings[key]=v.trim();await this.plugin.saveData(this.plugin.settings)}));
   new Setting(el).setName('打开工作台').setDesc('无需开启终端，插件会在后台连接。').addButton(b=>b.setButtonText('应用并打开').onClick(()=>this.plugin.open()));
  }
@@ -55,17 +57,18 @@ module.exports=class KnowledgeWorkbench extends Plugin{
   try{this.configure()}catch(e){new Notice(e.message)}
   this.registerView(VIEW,leaf=>new WorkbenchView(leaf,this));
   this.addRibbonIcon('network','打开知识工作台',()=>this.open());this.addCommand({id:'open',name:'打开知识工作台',callback:()=>this.open()});
-  this.registerObsidianProtocolHandler('yl-knowledge-workbench',()=>this.open());
+  this.registerObsidianProtocolHandler('yl-knowledge-workbench',params=>this.open(params.view));
  }
  configure(){
   const root=this.app.vault.adapter.getBasePath(),globalPath=path.join(os.homedir(),'.config','yl-toolbox','profile.json');
   let globalProfile={};try{globalProfile=readJson(globalPath)}catch{}
-  let profilePath=this.settings.profilePath||(samePath(root,globalProfile.knowledge_root)?globalPath:null);
+  const bound=globalProfile.adapter==='markdown'||globalProfile.retrieval?.manifest||globalProfile.personal_library?.enabled;
+  let profilePath=this.settings.profilePath||(bound&&samePath(root,globalProfile.knowledge_root)?globalPath:null);
   let profile;
   if(profilePath){
    profile=readJson(profilePath);if(!samePath(root,profile.knowledge_root))throw Error('所选配置不属于当前库。');
    let changed=false;profile.workbench=profile.workbench||{};
-   for(const key of ['name','avatar','model'])if(Object.hasOwn(this.settings,key)){const value=this.settings[key]||(key==='name'?'我的知识助手':'');if(profile.workbench[key]!==value){profile.workbench[key]=value;changed=true}}
+   for(const key of ['name','avatar','model','provider'])if(Object.hasOwn(this.settings,key)){const value=this.settings[key]||(key==='name'?'我的知识助手':'');if(profile.workbench[key]!==value){profile.workbench[key]=value;changed=true}}
    if(changed){fs.writeFileSync(profilePath,JSON.stringify(profile,null,2),'utf8');this.needsRefresh=true}
   }
   else{
@@ -76,7 +79,7 @@ module.exports=class KnowledgeWorkbench extends Plugin{
    if(profile.knowledge_root&&!samePath(root,profile.knowledge_root))throw Error('本机配置属于另一个库，已停止覆盖。');
    profile.adapter='markdown';profile.knowledge_root=root;
    profile.workbench={name:'我的知识助手',avatar:'',model:'gpt-6-astra',runtime,port:8800+parseInt(id.slice(0,4),16)%1000,...profile.workbench};
-   for(const key of ['name','avatar','model'])if(Object.hasOwn(this.settings,key))profile.workbench[key]=this.settings[key]||(key==='name'?'我的知识助手':key==='model'?'gpt-6-astra':'');
+   for(const key of ['name','avatar','model','provider'])if(Object.hasOwn(this.settings,key))profile.workbench[key]=this.settings[key]||(key==='name'?'我的知识助手':key==='model'?'gpt-6-astra':'');
    profile.retrieval={python:globalProfile.retrieval?.python||'',...profile.retrieval};
    if(this.settings.python)profile.retrieval.python=this.settings.python;
    const encoded=JSON.stringify(profile,null,2);if(!fs.existsSync(profilePath)||fs.readFileSync(profilePath,'utf8')!==encoded){fs.writeFileSync(profilePath,encoded,'utf8');this.needsRefresh=true}
@@ -84,21 +87,40 @@ module.exports=class KnowledgeWorkbench extends Plugin{
   const port=Number(profile.workbench?.port||8766);if(!Number.isInteger(port)||port<1024||port>65535)throw Error('本机端口无效。');
   this.address='http://127.0.0.1:'+port;this.config={root,profilePath,profile,port};
  }
- async open(){try{this.configure();await this.ensureService();const leaves=this.app.workspace.getLeavesOfType(VIEW),leaf=leaves[0]||this.app.workspace.getLeaf('tab');if(!leaves.length)await leaf.setViewState({type:VIEW,active:true});else if(!leaf.view.frame)await leaf.view.onOpen();else leaf.view.frame.contentWindow?.postMessage({type:'yl-service-restored'},this.address);await this.app.workspace.revealLeaf(leaf)}catch(e){new Notice(e.message)}}
+ async open(view){
+  try{
+   this.configure();await this.ensureService();
+   const leaves=this.app.workspace.getLeavesOfType(VIEW),leaf=leaves[0]||this.app.workspace.getLeaf('tab');
+   if(!leaves.length)await leaf.setViewState({type:VIEW,active:true});
+   else if(!leaf.view.frame||new URL(leaf.view.frame.src).origin!==this.address)await leaf.view.onOpen();
+   const frame=leaf.view.frame;
+   if(frame&&this.config.profile.personal_library?.enabled){
+    const tab=['quotes','works','map'].includes(view)?view:'map';
+    const home=this.address+'/#'+tab;
+    if(frame.src!==home)frame.src=home;
+    frame.contentWindow?.postMessage({type:'yl-open-knowledge',tab},this.address);
+   }else if(frame&&leaves.length)frame.contentWindow?.postMessage({type:'yl-service-restored'},this.address);
+   await this.app.workspace.revealLeaf(leaf);
+  }catch(e){new Notice(e.message)}
+ }
  async ensureService(){
   if(!this.config)this.configure();
-  const h=await health(this.address);if(h){if(h.vault&&!samePath(h.vault,this.config.root))throw Error('该端口正在服务另一个知识库。');if(this.needsRefresh){await refresh(this.address);this.needsRefresh=false}return}
+  let h=await health(this.address);
+  if(h&&h.vault&&!samePath(h.vault,this.config.root))throw Error('该端口正在服务另一个知识库。');
+  if(h&&(h.version!==this.manifest.version||h.qa_schema!=='personal-qa-v1'||h.generator!=='shared-provider-v1'))
+   throw Error('工作台后台仍在运行旧版。请等现有生成任务结束，退出旧后台后再打开工作台。');
+  if(h){if(h.qa_schema!=='personal-qa-v1'||(h.vault&&!samePath(h.vault,this.config.root)))throw Error('新端口未连接到当前知识库。');if(this.needsRefresh){await refresh(this.address);this.needsRefresh=false}return}
   if(!this.starting)this.starting=(async()=>{
    const {root,profilePath,profile,port}=this.config;
-   const bundled=path.join(root,this.manifest.dir,'backend','server.py');
-   const server=fs.existsSync(bundled)?bundled:path.join(root,'90_系统资料','系统导航','09_知识工作台','server.py');
+   const server=path.join(root,this.manifest.dir,'backend','server.py');
+   if(!fs.existsSync(server))throw Error('缺少随包提供的 backend/server.py，请重新安装完整的工作台 ZIP。');
    const configured=this.settings.python||profile.retrieval?.python;
    const python=process.platform==='win32'&&configured?path.join(path.dirname(configured),'pythonw.exe'):configured;
    if(!python||!fs.existsSync(server)||!fs.existsSync(python))throw Error('请在插件设置中指定 Python 环境。');
    const runtime=profile.workbench?.runtime||path.join(os.homedir(),'.config','yl-toolbox','runtime','knowledge-workbench');fs.mkdirSync(runtime,{recursive:true});
    const log=fs.openSync(path.join(runtime,'plugin-server.log'),'a');let launchError;
    const child=spawn(python,['-B','-X','utf8',server,'--profile',profilePath,'--port',String(port)],{cwd:path.dirname(server),detached:true,windowsHide:true,stdio:['ignore',log,log]});child.unref();fs.closeSync(log);child.on('error',e=>{launchError=e});
-   for(let i=0;i<90;i++){const ready=await health(this.address);if(ready){if(ready.vault&&!samePath(ready.vault,root))throw Error('本机端口已被另一个知识库使用。');this.needsRefresh=false;return}if(launchError)throw launchError;await new Promise(r=>setTimeout(r,700))}
+   for(let i=0;i<90;i++){const ready=await health(this.address);if(ready){if(ready.version!==this.manifest.version||!samePath(ready.vault,root))throw Error('后台版本或知识库与安装的工作台不一致。');this.needsRefresh=false;return}if(launchError)throw launchError;await new Promise(r=>setTimeout(r,700))}
    throw Error('本地服务尚未就绪，请检查 Python 与 PyYAML 是否安装。');
   })().finally(()=>{this.starting=null});return this.starting;
  }

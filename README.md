@@ -58,16 +58,16 @@ YL 知识工作台在原有 Markdown 和双向链接之上加了一层阅读与�
 
 ## 安装
 
-当前为 **v0.3.0 桌面试用版**，已在 Windows + Obsidian 桌面验证。未上架 Obsidian 社区插件市场；不支持手机。macOS / Linux 的代码路径保留，尚未实机验证。
+当前公开版为 **v0.5.4**，适用于 Windows 桌面上的 Obsidian。通过 GitHub Releases 安装和升级。macOS 与 Linux 的实机验证仍待完成。
 
 1. 安装 **Python 3.12 或以上**，执行一次 `python -m pip install "PyYAML>=6,<7"`。
-2. 从 [Releases](https://github.com/LeoAI1988/yl-knowledge-workbench/releases/latest) 下载 `yl-knowledge-workbench-0.3.0.zip`，解压。
-3. 将整个 `yl-knowledge-workbench` 文件夹放进库的 `.obsidian/plugins/`。**必须包含 backend 文件夹**，只复制三个插件文件不能运行。
+2. 从 [最新发行](https://github.com/LeoAI1988/yl-knowledge-workbench/releases/latest) 下载工作台 ZIP 和同名 SHA-256 校验文件。校验后解压。
+3. 在解压目录运行 `python ./yl-knowledge-workbench/install.py --vault "你的现有库路径" --dry-run`。首次安装去掉 `--dry-run` 再执行。升级时先等工作台任务完成、关闭对应后台，再将参数改为 `--upgrade`。
 4. 在 Obsidian「设置 → 第三方插件」启用「知识工作台」。插件设置填写 Python 可执行文件的完整路径，点击「应用并打开」。
 
 日常点击侧栏网络图标即可。Windows 使用 `pythonw.exe` 在后台启动，不需要保留终端窗口。首次安装需要配置环境，后续打开不用重复操作。
 
-问答、选题增强和写初稿还需要 **本机 Codex 已登录、模型权限及可用额度**。默认模型 ID 是 `gpt-6-astra`，可改成自己账号可用的模型。没有 Codex，仍可浏览、阅读和保存灵感。推理经过 Codex 云端服务，并非离线运行 GPT。
+浏览、阅读与保存灵感都在本机完成。问答、选题增强和初稿默认使用**已登录的本机 Codex**。在插件设置中显式选择 **OpenAI API** 后，才会用本机环境中的 `OPENAI_API_KEY` 和所选模型调用官方 Responses API。触发生成时会向所选服务发送本次问题、引用材料和相关对话。两种方式分别使用各自账户的权限与额度。
 
 [详细安装、升级与故障处理 →](docs/quickstart.md)
 
@@ -103,6 +103,8 @@ Obsidian + YL 工作台：浏览、追溯、检索、讨论、选题、初稿
 
 已有本项目 YL 数据结构的用户可以接入现有 profile，保留原检索与历史作品数据。其他 YL 库若结构不同，需先适配；不要复制作者的配置。普通库可独立使用，不依赖作者的原文件、头像或私人知识。
 
+已绑定 YL 来源清单、检索索引并启用个人资料管理的库，可以按正文管理作品、从原句收藏金句、沿思想地图读回来源。两个已接入同一套本地资料的客户端可以感知修改。普通 Markdown 库可直接使用资料阅读、双链、表达资产、检索与选题。
+
 [完整入库与调用机制 →](docs/workflow.md)
 
 ## 能力与当前限制
@@ -111,7 +113,7 @@ Obsidian + YL 工作台：浏览、追溯、检索、讨论、选题、初稿
 |---|---|---|
 | 资料阅读、明确类型的知识卡、领域、双向链接 | 支持 | 支持 |
 | 资料检索 | 本地文字检索 | 按已有配置使用全文与语义检索 |
-| 问答、选题增强、初稿 | 需 Codex | 需 Codex |
+| 问答、选题增强、初稿 | 需所选生成服务 | 需所选生成服务 |
 | 完整论述与历史播放/涨粉/完播/成交 | 尚无通用导入器 | 读取已有登记数据 |
 | 正式蒸馏入库 | 通过 YL Skills 或人工整理 | 通过 YL Skills |
 | 实时热度、平台采集/发布、公开分身服务器 | 本插件未实现 | 本插件未实现 |

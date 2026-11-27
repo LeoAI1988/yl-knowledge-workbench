@@ -86,10 +86,11 @@ class MarkdownVault(Knowledge):
         if ref['changed']:self.reload();return self.source(sid)
         return {**ref,'sections':[{'text':reading_text(self._docs[sid])}],'authorship':row['authorship'],'review_status':row['review_status']}
 
-    def search(self,query):
+    def search(self,query,body_only=False):
         self.ensure_fresh();terms=re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]{2,}',query.lower())
         terms=list(dict.fromkeys(terms+[t[i:i+2] for t in terms if len(t)>3 for i in range(len(t)-1)]))
-        ranked=sorted(((sum((r['title']+' '+self._docs[sid]).lower().count(t) for t in terms),sid) for sid,r in self.sources.items()),reverse=True)
+        ranked=sorted(((sum((r['title']+' '+self._docs[sid]).lower().count(t) for t in terms),sid) for sid,r in self.sources.items()
+                       if not body_only or str(self._meta[sid].get('type','source')) not in ('atom','knowledge_atom','知识原子','expression','表达资产')),reverse=True)
         passages=[]
         for score,sid in ranked:
             if not score or len(passages)>=8:break

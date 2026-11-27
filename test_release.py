@@ -16,6 +16,8 @@ class InstallTests(unittest.TestCase):
             out=install(package,vault);dest=Path(out['path']);(dest/'data.json').write_text('{"name":"mine"}','utf-8')
             self.assertEqual(install(package,vault)['status'],'already-installed')
             (package/'main.js').write_text('v2','utf-8');index()
+            self.assertEqual(install(package,vault,dry_run=True)['operation'],'upgrade')
+            self.assertEqual((dest/'main.js').read_text(),'v1')
             with self.assertRaises(ValueError):install(package,vault)
             result=install(package,vault,upgrade=True)
             self.assertEqual((Path(result['backup'])/'main.js').read_text(),'v1')

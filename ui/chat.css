@@ -60,3 +60,41 @@
 .conversation-identity{flex-shrink:0;display:flex;align-items:center;gap:14px;width:100%;max-width:760px;margin:0 auto;padding:8px 0 18px;border-bottom:1px solid #ebe7df}
 .conversation-identity img{width:58px;height:58px;object-fit:cover;object-position:center 22%;border-radius:50%}.conversation-identity h1{font-family:Georgia,"Noto Serif SC",serif;font-size:25px;margin:0;font-weight:500}.conversation-identity p{font-size:14px;color:#8b7e71;margin:7px 0 0}
 .conversation-greeting img{width:76px;height:76px}
+
+/* 长对话只滚动记录；空白页在窗口过矮时由欢迎页整体滚动。 */
+.main.chat-main{box-sizing:border-box;min-width:0;min-height:0;max-height:100dvh}
+.chat-main>.topbar{height:48px}
+.conversation{box-sizing:border-box;min-width:0}
+.conversation.has-messages{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto}
+.conversation.has-messages>.conversation-identity{grid-row:1;grid-column:1;box-sizing:border-box;min-width:0;max-width:880px;gap:9px;padding:4px 0 7px}
+.conversation-identity img{width:32px;height:32px;flex-shrink:0}
+.conversation-identity h1{font-size:18px;line-height:1.25;overflow-wrap:anywhere}
+.conversation-identity p{display:none}
+.conversation.has-messages>.conversation-scroll{grid-row:2;grid-column:1;min-width:0;padding-block:12px 18px}
+.conversation.has-messages>.conversation-input-area{grid-row:3;grid-column:1}
+.conversation.has-messages>.conversation-latest{grid-row:2;grid-column:1;position:relative;inset:auto;transform:none;align-self:end;justify-self:center;margin-bottom:6px}
+.conversation-column{max-width:880px;gap:20px}
+.conversation-message,.conversation-input-area,.conversation-composer,.conversation-composer textarea{box-sizing:border-box}
+.conversation .markdown :is(img,video){max-width:100%;height:auto}
+.conversation-input-area{min-width:0;max-width:896px;padding-top:5px}
+.conversation-composer{padding:7px 10px 6px;border-radius:14px}
+.conversation-composer textarea,.conversation-welcome .conversation-composer textarea{min-height:38px;max-height:clamp(38px,18dvh,96px);font-size:15px;line-height:1.4}
+.conversation-input-tools{gap:6px;margin-top:4px;flex-wrap:wrap}
+.conversation-library,.conversation-library select{min-width:0;max-width:100%}
+.conversation-library{flex:0 1 auto}
+.conversation-library svg{flex-shrink:0}
+.conversation-model{min-width:0;overflow-wrap:anywhere}
+.conversation-send.primary{margin-inline-start:auto}
+.conversation-input-hint{margin:3px 0 4px;font-size:11px;line-height:1.35}
+.conversation-context{padding-bottom:4px;margin-bottom:4px}
+.conversation-progress{margin-bottom:6px}
+.conversation.is-empty{justify-content:flex-start;padding-bottom:0;overflow-y:auto;overscroll-behavior:contain}
+.conversation-welcome{box-sizing:border-box;min-height:100%;min-width:0;flex:0 0 auto;display:flex;flex-direction:column;padding-top:8px}
+.conversation-greeting{margin-top:auto;margin-bottom:6px}
+.conversation-greeting img{width:52px;height:52px;flex-shrink:0}
+.conversation-greeting h1{min-width:0;overflow-wrap:anywhere}
+.conversation-intro{margin:0 0 auto;padding-bottom:10px}
+.conversation-welcome .conversation-input-hint{display:block}
+.conversation-starters{margin:4px 0 6px;gap:6px}
+.conversation-starters button{max-width:100%;padding:4px 8px;white-space:normal}
+@media(max-height:440px){.chat-main>.topbar{height:36px}.conversation-greeting img{width:36px;height:36px}.conversation.has-messages>.conversation-identity{padding-block:3px}.conversation-identity img{width:24px;height:24px}}

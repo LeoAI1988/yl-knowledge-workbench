@@ -2,7 +2,8 @@ import React,{useEffect,useRef,useState} from 'react';
 import {ArrowUp,ArrowDown,BookOpen,Copy,Check,Link,X,LoaderCircle} from 'lucide-react';
 import './chat.css';
 
-export default function ChatView({model="gpt-6-astra",avatar="/avatar.png",name="我的知识助手",messages,question,setQuestion,sendQuestion,job,busy,jobText,context,clearContext,showSource,Markdown,notify}){
+export default function ChatView({personalLibrary,model="gpt-6-astra",avatar="/avatar.png",name="我的知识助手",messages,question,setQuestion,sendQuestion,job,busy,jobText,context,clearContext,showSource,Markdown,notify}){
+ const [mode,setMode]=useState('B');
  const scroll=useRef(null),input=useRef(null),following=useRef(true);
  const[copied,setCopied]=useState(null),[showLatest,setShowLatest]=useState(false);
  const hasMessages=messages.length>0;
@@ -10,11 +11,11 @@ export default function ChatView({model="gpt-6-astra",avatar="/avatar.png",name=
  useEffect(()=>{if(following.current)jumpToLatest()},[messages,jobText,busy]);
  useEffect(()=>{const el=input.current;if(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px'}},[question]);
  async function copyReply(text,index){try{await navigator.clipboard.writeText(text);setCopied(index);setTimeout(()=>setCopied(null),1800)}catch{notify('复制未成功，请选择文字复制')}}
- function submit(){if(job||!question.trim())return;following.current=true;sendQuestion();input.current?.focus()}
+ function submit(){if(job||!question.trim())return;following.current=true;sendQuestion(question,mode);input.current?.focus()}
  const composer=<div className="conversation-input-area"><div className="conversation-composer">
    {context&&<div className="conversation-context"><Link size={14}/><span>{context}</span><button aria-label="移除带入的观点" onClick={clearContext}><X size={14}/></button></div>}
    <textarea ref={input} rows={2} aria-label="向分身提问" placeholder={hasMessages?'继续聊聊…':'你想从哪里开始？'} value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();submit()}}}/>
-   <div className="conversation-input-tools"><span className="conversation-library"><BookOpen size={16}/>我的知识库</span><div className="conversation-model">{model==='gpt-6-astra'?'GPT-6 Astra':model}</div><button className="primary conversation-send" aria-label="发送问题" title="发送问题" disabled={!!job||!question.trim()} onClick={submit}>{job?<LoaderCircle size={19} className="spin"/>:<ArrowUp size={21}/>}</button></div>
+   <div className="conversation-input-tools"><label className="conversation-library"><BookOpen size={16}/><select aria-label="问答资料范围" value={mode} onChange={e=>setMode(e.target.value)} disabled={!!job}><option value="A">仅正文</option><option value="B">正文与金句</option>{!personalLibrary&&<option value="C">正文、金句与原子</option>}</select></label><div className="conversation-model">{model==='gpt-6-astra'?'GPT-6 Astra':model}</div><button className="primary conversation-send" aria-label="发送问题" title="发送问题" disabled={!!job||!question.trim()} onClick={submit}>{job?<LoaderCircle size={19} className="spin"/>:<ArrowUp size={21}/>}</button></div>
   </div><p className="conversation-input-hint">Enter 发送 · Shift + Enter 换行</p></div>;
  return <section className={'conversation '+(hasMessages?'has-messages':'is-empty')} aria-label={name+"对话"}>
   {hasMessages&&<header className="conversation-identity"><img src={avatar} alt={name}/><div><h1>{name}</h1><p>和我的知识聊一聊</p></div></header>}

@@ -53,3 +53,15 @@
 
 
 !/tools/verify_release.py
+!/personal_library.py
+!/library_browse.py
+!/reading_info.py
+!/publication.py
+!/qa_evidence.py
+!/test_personal_library.py
+!/ui/personal-library.html
+!/ui/personal-library.js
+!/ui/workbench-route.js
+!/dist/personal-library.html
+!/dist/personal-library.js
+!/dist/workbench-route.js

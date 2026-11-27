@@ -1,5 +1,5 @@
 """Install an extracted, verified release; preserve data.json and user state."""
-import argparse, hashlib, json, shutil
+import argparse, hashlib, importlib.util, json, shutil
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -26,12 +26,19 @@ def install(package,vault,dry_run=False,upgrade=False):
     old={}
     if dest.exists():
         old=manifest(dest)  # Fail closed on unknown or modified core.
-        known=set(old)|{'FILES.json','data.json'}
-        actual={p.relative_to(dest).as_posix() for p in dest.rglob('*') if p.is_file()}
+        known=set(old)|{'FILES.json','data.json','backend/dist/active-service.json'}
+        actual=set()
+        for file in dest.rglob('*'):
+            if not file.is_file():continue
+            if file.parent.name=='__pycache__' and file.suffix=='.pyc' and not file.is_symlink():
+                try:source=Path(importlib.util.source_from_cache(str(file)))
+                except ValueError:source=None
+                if source is not None and source.relative_to(dest).as_posix() in old:continue
+            actual.add(file.relative_to(dest).as_posix())
         if actual-known:raise ValueError('Unmanaged files found; keep a backup and resolve manually')
         if old==incoming:return {'status':'already-installed','path':str(dest)}
-        if not upgrade:raise ValueError('Existing version differs; use --upgrade after review')
-    if dry_run:return {'status':'dry-run','files':len(incoming),'path':str(dest)}
+        if not upgrade and not dry_run:raise ValueError('Existing version differs; use --upgrade after review')
+    if dry_run:return {'status':'dry-run','operation':'upgrade' if old else 'install','files':len(incoming),'path':str(dest)}
     backup=None
     if old:
         backup=vault/'.obsidian/plugin-backups'/f'{PLUGIN_ID}-{datetime.now():%Y%m%d-%H%M%S-%f}'

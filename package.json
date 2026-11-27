@@ -1,6 +1,6 @@
 {
   "name": "yl-knowledge-workbench",
-  "version": "0.3.0",
+  "version": "0.5.4",
   "private": true,
   "type": "module",
   "scripts": {

@@ -10,12 +10,14 @@ Python 3.12+、Node.js 20+、pnpm 10。安装依赖并构建：
 python -m pip install -r plugin/requirements.txt
 pnpm install --frozen-lockfile
 pnpm build
-python -B -m unittest test_workbench test_reading test_portable test_release -q
+python -B -m unittest test_workbench test_reading test_portable test_release test_personal_library -q
 node tools/test_plugin.cjs
 python -B package_plugin.py
 ```
 
 `dist/` 是已构建前端，插件安装包会包含它。打包采用显式文件清单、固定时间戳和排序，输出逐文件 FILES.json 与 ZIP SHA-256。同一版本已有不同字节时拒绝重建，需增加版本。构建不联网发布。
+
+如已安装 YL 集群，可将 `YL_WORKBENCH_TEST_CORE` 设为该集群目录，启用可选适配器的合成资料回归测试。测试正文与来源清单位于临时库中。
 
 ## 目录职责
 
@@ -26,7 +28,7 @@ python -B package_plugin.py
 | server.py | 本机 HTTP、灵感、任务、对话与草稿保存 |
 | markdown_vault.py | 普通 Markdown / 属性 / 双向链接适配 |
 | knowledge.py | 已有 YL 数据格式适配与共用读取 |
-| astra.py | 通过本机 Codex app-server 进行纯文本/JSON 推理 |
+| astra.py | 通过所选本机 Codex 或官方 OpenAI API 进行文本与 JSON 推理 |
 | tools/install.py | 清单验证、备份升级、配置保留 |
 | tools/demo.py | 创建独立演示数据，不进行推理 |
 

@@ -4,10 +4,13 @@ from datetime import datetime
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
+from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+from urllib.error import HTTPError, URLError
 import yaml
 from astra import Astra, MODEL
 from knowledge import Knowledge, parse_md, sha, read_json
+from qa_evidence import SCHEMA as QA_SCHEMA, qa_mode
 
 HERE=Path(__file__).resolve().parent
 DEFAULT_PROFILE=Path.home()/'.config/yl-toolbox/profile.json'
@@ -73,8 +76,8 @@ class App:
         self.runtime.mkdir(parents=True,exist_ok=True)
         self.dbpath=self.runtime/'workflow.sqlite3'; self.lock=threading.RLock(); self.jobs={}
         self.model=self.settings.get('model') or MODEL
-        self.astra=Astra(self.runtime/'astra',model=self.model)
-        self.model_status={'available':None,'model':self.model,'label':'本机 Codex · '+self.model,'message':'点击对话即可连接'}
+        self.astra=Astra(self.runtime/'astra',model=self.model,provider=self.settings.get('provider','local_codex'))
+        self.model_status=self.astra.status()
         with self.db() as db:
             db.executescript('''CREATE TABLE IF NOT EXISTS ideas(id TEXT PRIMARY KEY,path TEXT NOT NULL,hash TEXT UNIQUE NOT NULL,created TEXT,attribution TEXT,status TEXT,analysis TEXT,selected INTEGER,draft_path TEXT,evidence TEXT);
             CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,kind TEXT,status TEXT,created TEXT,result TEXT,error TEXT);
@@ -82,6 +85,8 @@ class App:
             CREATE TABLE IF NOT EXISTS analysis_versions(id INTEGER PRIMARY KEY AUTOINCREMENT,idea_id TEXT,created TEXT,analysis TEXT,selected INTEGER,draft_path TEXT);
             ''')
             db.execute("UPDATE jobs SET status='interrupted',error='工作台重启，可从原始输入重试。' WHERE status IN ('running','queued')")
+            if 'qa_mode' not in {r[1] for r in db.execute('pragma table_info(messages)')}:
+                db.execute('alter table messages add column qa_mode TEXT')
 
     @contextmanager
     def db(self):
@@ -151,21 +156,23 @@ class App:
         question=str(p.get('question','')).strip()
         if not question or len(question)>1800: raise ValueError('问题请控制在 1—1,800 字。')
         ids=p.get('node_ids',[])[:8]
+        mode=qa_mode(p.get('mode'))
         with self.db() as db:
-            history=[dict(r) for r in db.execute('select role,text from messages order by id desc limit 8')][::-1]
-            db.execute('insert into messages(role,text,created,citations) values(?,?,?,?)',('user',question,stamp(),'[]'))
+            history=[dict(r) for r in db.execute('select role,text,qa_mode as mode from messages where qa_mode=? order by id desc limit 6',(mode,))][::-1]
+            db.execute('insert into messages(role,text,created,citations,qa_mode) values(?,?,?,?,?)',('user',question,stamp(),'[]',mode))
         def run(job):
             job['phase']='正在检索原文与完整语境'
-            evidence=self.k.evidence(question,ids)
+            evidence=self.k.question_packet(question,mode,history,ids)
             job['phase']='模型正在结合材料回答'
             instruction=CHAT_INSTRUCTION+'\n你的显示名称是：'+self.settings.get('name','我的知识助手')
-            result=self.astra.complete(instruction,jsons({'问题':question,'近期对话':history,'任务证据':evidence}),progress=lambda s:job.update(text=job['text']+s))
+            result=self.astra.complete(instruction,evidence['prompt'],progress=lambda s:job.update(text=job['text']+s))
             cited=set(re.findall(r'\[(S\d+)\]',result['text']))
             valid={x['citation'] for x in evidence['passages']}
             if not cited<=valid: raise ValueError('回答含未对应来源的引用编号，已保留原问题，请重试。')
             result['citations']=evidence['passages'];result['semantic']=evidence['semantic']
             result['warnings']=evidence['warnings']
-            with self.db() as db: db.execute('insert into messages(role,text,created,citations) values(?,?,?,?)',('assistant',result['text'],stamp(),jsons(result['citations'])))
+            result.update(mode=mode,evidence_id=evidence['evidence_id'])
+            with self.db() as db: db.execute('insert into messages(role,text,created,citations,qa_mode) values(?,?,?,?,?)',('assistant',result['text'],stamp(),jsons(result['citations']),mode))
             self.model_status.update(available=True,message='已连接')
             return result
         return self.job('chat',run)
@@ -174,7 +181,7 @@ class App:
         ident=p.get('id'); idea=self.idea(ident)
         def run(job):
             job['phase']='正在查找相关原文与历史选题'
-            evidence=self.k.evidence(idea['text'][:1800],p.get('node_ids',[]))
+            evidence=self.k.question_packet(idea['text'][:1500],'B') if getattr(self.k,'profile',{}).get('personal_library',{}).get('enabled') else self.k.evidence(idea['text'][:1800],p.get('node_ids',[]))
             hooks=[{k:t.get(k) for k in ('id','title','mechanism','boundary','date','metrics','conversions')} for t in self.k.topics]
             instruction=CHAT_INSTRUCTION+'''\n本次是选题编辑，只输出规定JSON。给2至4个真正不同的方向，不为了凑数换标题。保留灵感核心，给明确人群、自然且简短的受众转换路径、开头承诺、简要结构和合理字数。
 scores 五项各0—5：audience受众相关性、material本人材料支撑、promise承诺兑现、distinctiveness独特性、transition转换简洁度。这是编辑判断，绝不是播放或爆款概率。资料不足降低confidence，不伪造市场规模、互联网趋势或成交数据。
@@ -225,6 +232,9 @@ scores 五项各0—5：audience受众相关性、material本人材料支撑、p
         analysis=json.loads(idea['analysis']); direction=analysis['directions'][idea['selected']]
         evidence=json.loads(idea['evidence'])
         def run(job):
+            nonlocal evidence
+            if getattr(self.k,'profile',{}).get('personal_library',{}).get('enabled'):
+                evidence=self.k.question_packet(idea['text'][:1500],'B')
             self.k.verify_evidence(evidence)
             job['phase']='模型正在按选定方向组织初稿'
             result=self.astra.complete(CHAT_INSTRUCTION+'\n本次写初稿。以完整思想推进和本人原话为先，不调用通用风格，不编造本人经历。输出标题和正文，不含分析过程；篇幅参考选定方向。未经确认的数字和科学事实不升级。必要引用保留[S编号]供审稿。',jsons({'灵感':idea['text'],'方向':direction,'材料':evidence}),progress=lambda s:job.update(text=job['text']+s))
@@ -247,11 +257,24 @@ scores 五项各0—5：audience受众相关性、material本人材料支撑、p
 
     def get(self,path):
         if path=='/api/bootstrap':
-            data=self.k.bootstrap()
+            personal=bool(getattr(self.k,'profile',{}).get('personal_library',{}).get('enabled'))
+            if personal:
+                with self.db() as db: idea_count=db.execute('select count(*) from ideas').fetchone()[0]
+                data={'identity':{'name':self.settings.get('name') or '我的知识助手'},'ideaCount':idea_count}
+            else:
+                data=self.k.bootstrap()
+                data['ideas']=self.list_ideas()
+            data['personalLibrary']=personal
+            board_path=self.settings.get('desktop_board_connection')
+            data['desktopBoard']=bool(board_path and Path(board_path).is_absolute() and Path(board_path).is_file())
             avatar=Path(self.settings['avatar']) if self.settings.get('avatar') else None
             data['identity']['avatar_version']=str(avatar.stat().st_mtime_ns) if avatar and avatar.is_file() else 'default'
-            return {**data,'demo':bool(self.settings.get('demo')),'ideas':self.list_ideas(),'model':self.model_status,'active_job':next(({'id':j['id'],'kind':j['kind']} for j in self.jobs.values() if j['status'] in ('queued','running')),None)}
-        if path=='/api/health': return {'app':'yl-knowledge-workbench','version':'0.3.0','model':self.model,'pid':os.getpid(),'vault':str(self.k.root)}
+            return {**data,'demo':bool(self.settings.get('demo')),'model':self.model_status,'active_job':next(({'id':j['id'],'kind':j['kind']} for j in self.jobs.values() if j['status'] in ('queued','running')),None)}
+        if path=='/api/topic-workspace':
+            if hasattr(self.k,'ensure_fresh'): self.k.ensure_fresh()
+            topics=self.k.topics
+            return {'topics':topics,'data_date':max((t['date'] for t in topics),default=''),'ideas':self.list_ideas()}
+        if path=='/api/health': return {'app':'yl-knowledge-workbench','version':'0.5.4','qa_schema':QA_SCHEMA,'generator':'shared-provider-v1','model':self.model,'pid':os.getpid(),'vault':str(self.k.root)}
         if path=='/api/library': return self.k.library()
         if path=='/api/ideas': return self.list_ideas()
         if path=='/api/history': return self.history()
@@ -268,6 +291,39 @@ scores 五项各0—5：audience受众相关性、material本人材料支撑、p
         raise KeyError('未找到该内容。')
 
     def post(self,path,p):
+        if path=='/api/knowledge-evidence':
+            if not p.get('vault') or Path(p['vault']).resolve()!=self.k.root:
+                raise ValueError('请先选择与本机工作台相同的知识库。')
+            return self.k.question_packet(p['question'],p.get('mode'),p.get('history',[]),p.get('node_ids',[]))
+        if path=='/api/personal-library':
+            from personal_library import PersonalLibrary
+            profile=getattr(self.k,'profile',{})
+            if not profile.get('personal_library',{}).get('enabled'):
+                raise ValueError('当前知识库未启用本人正文管理')
+            return PersonalLibrary(profile).dispatch(p)
+        if path=='/api/desktop-board':
+            connection=self.settings.get('desktop_board_connection')
+            if not connection or not Path(connection).is_absolute() or not Path(connection).is_file():
+                raise ValueError("请先在当前库配置桌面提示板连接并启动对应程序。")
+            config=Path(connection)
+            connection=read_json(config)
+            port=connection.get("port")
+            if type(port) is not int or not 1024 <= port <= 65535:
+                raise ValueError("提示板连接已失效，请重新打开提示板。")
+            class StayLocal(HTTPRedirectHandler):
+                def redirect_request(self,*args): return None
+            request=Request(f"http://127.0.0.1:{port}/api/v1/workbench",
+                data=jsons({**p,"vault":str(self.k.root)}).encode("utf-8"), method="POST",
+                headers={"Authorization":"Bearer "+connection["token"],"Content-Type":"application/json"})
+            try:
+                with build_opener(ProxyHandler({}),StayLocal()).open(request,timeout=12) as response:
+                    return json.load(response)
+            except HTTPError as exc:
+                try: detail=json.load(exc).get("error")
+                except ValueError: detail=None
+                raise ValueError(detail or "提示板暂时无法读取材料。") from None
+            except (URLError,TimeoutError):
+                raise ValueError("未连上桌面提示板，请重新打开提示板。") from None
         if path=='/api/ideas': return self.save_idea(p)
         if path=='/api/chat': return self.chat(p)
         if path=='/api/analyze': return self.analyze(p)
@@ -284,15 +340,28 @@ scores 五项各0—5：audience受众相关性、material本人材料支撑、p
                 next_profile=read_json(profile)
                 next_settings=next_profile.get('workbench',{})
                 next_model=next_settings.get('model') or MODEL
-                if next_model!=self.model:
+                next_provider=next_settings.get('provider','local_codex')
+                if next_model!=self.model or next_provider!=self.astra.provider:
                     if any(j['status'] in ('queued','running') for j in self.jobs.values()):raise ValueError('当前任务完成后再切换模型。')
-                    self.model=next_model;self.astra=Astra(self.runtime/'astra',model=self.model)
-                    self.model_status={'available':None,'model':self.model,'label':'本机 Codex · '+self.model,'message':'点击测试连接'}
+                    chosen=Astra(self.runtime/'astra',model=next_model,provider=next_provider)
+                    self.model=next_model;self.astra=chosen
+                    self.model_status=self.astra.status()
                 self.settings=next_settings
                 self.k.profile=next_profile
             self.k.reload()
             return {'ok':True}
         raise KeyError('未找到该操作。')
+
+LIBRARY_ASSETS=('personal-library.html','personal-library.js')
+
+def library_asset(profile,name):
+    config=profile.get('personal_library',{})
+    adapter=Path(config.get('adapter') or '')
+    if config.get('enabled') and adapter.is_absolute() and adapter.is_file() and name in LIBRARY_ASSETS:
+        shared=adapter.parent/'ui'
+        if all((shared/asset).is_file() for asset in LIBRARY_ASSETS):
+            return shared/name
+    return HERE/'dist'/name
 
 def handler(app):
     class Handler(BaseHTTPRequestHandler):
@@ -325,6 +394,14 @@ def handler(app):
                     avatar=app.settings.get('avatar')
                     if not avatar: return self.send_data(200,b'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" rx="60" fill="#ead8cf"/><circle cx="60" cy="43" r="20" fill="#c56949"/><path d="M24 106a36 36 0 0 1 72 0" fill="#c56949"/></svg>','image/svg+xml')
                     file=Path(avatar)
+                elif path in ('/personal-library.html','/personal-library.js'):
+                    profile=getattr(app.k,'profile',{})
+                    if path.endswith('.html') and profile.get('personal_library',{}).get('enabled') and parse_qs(urlparse(self.path).query).get('embedded')!=['1']:
+                        # The browser retains the original fragment across this redirect.
+                        self.send_response(302);self.send_header('Location','/')
+                        self.send_header('Cache-Control','no-store');self.send_header('Content-Length','0');self.end_headers()
+                        return
+                    file=library_asset(profile,path[1:])
                 else:
                     file=(HERE/'dist'/('index.html' if path=='/' else path.lstrip('/'))).resolve()
                     if not file.is_relative_to((HERE/'dist').resolve()): raise KeyError('无效文件。')
@@ -336,7 +413,8 @@ def handler(app):
             if not self.allowed():return self.send_data(403,{'error':'仅允许本机工作台操作。'})
             try:
                 size=int(self.headers.get('Content-Length','0'))
-                if not 0<size<=150000:raise ValueError('请求内容过大或为空。')
+                limit = 2_500_000 if urlparse(self.path).path in ('/api/desktop-board','/api/personal-library') else 150000
+                if not 0<size<=limit:raise ValueError('请求内容过大或为空。')
                 p=json.loads(self.rfile.read(size))
                 if not isinstance(p,dict):raise ValueError('请求格式无效。')
                 self.send_data(200,app.post(urlparse(self.path).path,p))
@@ -369,6 +447,11 @@ if __name__=='__main__':
     except OSError as e:
         if e.errno in (48,98,10048) or getattr(e,'winerror',None)==10048: raise SystemExit(0)
         raise
+    if Path(args.profile).is_file():
+        config=read_json(args.profile)
+        root=config.get('knowledge_root') or config.get('vault')
+        if root and HERE.is_relative_to(Path(root).resolve()) and args.port==int(config.get('workbench',{}).get('port') or 8766):
+            atomic_write(HERE/'dist/active-service.json',jsons({'vault':str(Path(root).resolve()),'port':args.port}))
     if __import__('sys').stdout:print(jsons({'listening':f'http://127.0.0.1:{args.port}','pid':os.getpid()}),flush=True)
     if args.open:webbrowser.open(f'http://127.0.0.1:{args.port}/')
     server.serve_forever()

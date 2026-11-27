@@ -2,7 +2,7 @@
 import copy, http.client, json, tempfile, threading, time, unittest
 from pathlib import Path
 from unittest.mock import patch
-from server import App, handler, ThreadingHTTPServer, validate_enhancement
+from server import App, handler, library_asset, ThreadingHTTPServer, validate_enhancement
 from knowledge import Knowledge, sha
 
 class FakeKnowledge:
@@ -10,6 +10,7 @@ class FakeKnowledge:
         self.root=Path(profile); self.nodes={'ATOM-1':{}};self.topics=[]
     def uri(self,path):return 'obsidian://open?file='+Path(path).name
     def evidence(self,*args):return {'nodes':[{'id':'ATOM-1'}],'passages':[{'citation':'S1','source_id':'source-1','source_hash':'abc','node_ids':['ATOM-1']}],'semantic':True,'warnings':[]}
+    def question_packet(self,*args):return {**self.evidence(),'prompt':'fixture evidence','evidence_id':'fixture-qa'}
     def verify_evidence(self,evidence):pass
 
 class FakeAstra:
@@ -33,6 +34,28 @@ class WorkbenchTests(unittest.TestCase):
             time.sleep(.02)
         self.fail('fixture job timed out')
     def make_idea(self):return self.app.save_idea({'text':'知识库管理的终极目的是使用。','attribution':'personal'})['id']
+    def test_shared_library_reads_current_assets_as_one_pair(self):
+        adapter=self.root/'personal_library.py';adapter.touch()
+        profile={'personal_library':{'enabled':True,'adapter':str(adapter)}}
+        shared=self.root/'ui';shared.mkdir()
+        html=shared/'personal-library.html';script=shared/'personal-library.js'
+        html.write_text('fixture',encoding='utf-8')
+        self.assertNotEqual(library_asset(profile,html.name),html)
+        script.write_text('v1',encoding='utf-8')
+        self.assertEqual(library_asset(profile,html.name),html)
+        script.write_text('v2',encoding='utf-8')
+        self.assertEqual(library_asset(profile,script.name).read_text('utf-8'),'v2')
+    def test_personal_home_omits_legacy_graph_and_fetches_topics_on_demand(self):
+        self.app.k.profile={'personal_library':{'enabled':True}}
+        ident=self.make_idea()
+        self.app.k.topics=[{'id':'topic','date':'2026-10-01'}]
+        home=self.app.get('/api/bootstrap')
+        self.assertTrue(home['personalLibrary'])
+        self.assertEqual(home['ideaCount'],1)
+        self.assertTrue({'nodes','edges','expressions','topics','ideas'}.isdisjoint(home))
+        workshop=self.app.get('/api/topic-workspace')
+        self.assertEqual(workshop['ideas'][0]['id'],ident)
+        self.assertEqual(workshop['topics'],self.app.k.topics)
     def analyze(self,ident):
         self.app.astra=FakeAstra(json.dumps({'original':original(),'core':'使用知识','directions':[direction(),direction()],'note':'编辑判断'},ensure_ascii=False))
         return self.wait(self.app.analyze({'id':ident}))
@@ -89,6 +112,25 @@ class WorkbenchTests(unittest.TestCase):
     def test_read_source_requires_allowlist(self):
         k=Knowledge.__new__(Knowledge);k.sources={}
         with self.assertRaises(KeyError):k.source('../private')
+    def test_current_review_populates_asset_only_candidate(self):
+        root=self.root; reader=root/'90_系统资料/系统导航/07_阅读入口'
+        base=root/'演示台账'
+        topics=root/'03_选题库/选题'
+        reader.mkdir(parents=True);base.mkdir(parents=True);topics.mkdir(parents=True)
+        for name,header in [('发布记录.csv','publication_id,work_id,asset_id,platform'),('内容表现.csv','publication_id,captured_at,views'),('业务转化.csv','publication_id,product_name')]:
+            (base/name).write_text(header+'\n',encoding='utf-8')
+        (topics/'candidate.md').write_text('---\ntopic_id: TOP-NEW\ntitle: 新选题\nsource_asset_ids: [AST-NEW]\nsource_work_ids: []\nplatform_object_id: post-1\ncurrent_window_status: 已匹配\nselection_status: candidate_single_snapshot\n---\n',encoding='utf-8')
+        snapshot='90_系统资料/系统导航/07_阅读入口/表现历史/current.json'
+        (reader/'表现历史').mkdir()
+        (reader/'当前复盘.json').write_text(json.dumps({'snapshot':snapshot,'source_sha256':'hash','captured_at':'2001-02-03T04:05:00+08:00','ranking_rule':'fixture-rule'}),encoding='utf-8')
+        (root/snapshot).write_text(json.dumps({'review':{'source_sha256':'hash'},'rows':[{'object_id':'post-1','asset_id':'AST-NEW','title':'新选题','播放':'42','关注':'3','完播率':'25.00','captured_at':'2001-02-03T04:05:00+08:00','综合排名':3,'综合评分':1.25}]}),encoding='utf-8')
+        k=Knowledge.__new__(Knowledge);k.root=root;k.reader=reader;k.works=[{'id':'AST-NEW','work_id':'','title':'新选题','node_ids':[],'path':root/'work.md'}]
+        k.profile={'workbench':{'publication_ledger':base.name}}
+        k.uri=lambda path:'obsidian://open'
+        t=k.read_topics()[0]
+        self.assertEqual((t['summary']['views'],t['summary']['follows'],t['score_rank'],len(t['works'])),('42','3',3,1))
+        self.assertEqual(t['selection_status'],'candidate_single_snapshot')
+        self.assertEqual(t['summary']['sale'],'待补')
     def test_evidence_rejects_changed_original(self):
         k=Knowledge.__new__(Knowledge);p=self.root/'source.md';p.write_text('旧原文',encoding='utf-8')
         k.sources={'s':{'path':str(p)}};e={'passages':[{'source_id':'s','source_hash':sha(p.read_bytes())}]}

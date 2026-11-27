@@ -6,6 +6,7 @@ from contextlib import closing
 from pathlib import Path
 from urllib.parse import quote
 import yaml
+from publication import publication_ledger, publication_table
 
 DOMAINS = [('D03','AI与个人能力','把经验变成可调用的能力','#56d6c9'),('D02','商业与公司经营','组织、产品与长期积累','#a69af5'),('D01','建筑与空间','从造房子到组织生活','#edb771'),('D06','传播与获客','流量、IP与表达','#ea8fb9'),('D04','历史与文明','比较、变迁与人的处境','#8bb9e9'),('D05','认知与学习','知识如何进入你的体系','#a6c879'),('D07','文学与生活','审美、记忆与日常','#c9a180')]
 TYPES={'OPI':'观点','SOL':'方法','QST':'问题','REF':'参考','CON':'概念','CHAIN':'论述链','QUO':'金句','EXP':'经历与表达','CAS':'案例','MET':'方法'}
@@ -58,7 +59,7 @@ def topic_summary(metrics,conversions):
     return {**{k:representative.get(k) for k in ('publication_id','title','views','follows','completion_rate','captured_at')},'sale':sale,'publication_count':len(metrics),'basis':'多条作品时展示播放最高的一条；成交仅指已记录的该作品归因窗口。'}
 
 class Knowledge:
-    def __init__(self, profile_path):
+    def __init__(self, profile_path, *, load_navigation=True):
         self.profile_path=Path(profile_path); self.profile=read_json(profile_path)
         self.root=Path(self.profile['knowledge_root']).resolve()
         self.network=self.root/'90_系统资料/系统导航/06_统一知识网络'
@@ -69,7 +70,7 @@ class Knowledge:
         spec=importlib.util.spec_from_file_location('yl_retrieval',script)
         self.retrieval=importlib.util.module_from_spec(spec); spec.loader.exec_module(self.retrieval)
         self.rargs=self.retrieval.config(profile_path)
-        self.reload()
+        if load_navigation:self.reload()
 
     def reload(self):
         rows=read_json(self.network/'统一对象索引.json')
@@ -124,7 +125,14 @@ class Knowledge:
         files+=list((self.reader/'作品索引').glob('*.md'))
         files+=list((self.root/'02_我的作品全集/工作台草稿').glob('*.md'))
         files+=list((self.root/'03_选题库/选题').glob('*.md'))
-        files+=list((self.root/'90_系统资料/内容生产/AI业务/04_发布与数据/00_统一台账').glob('*.csv'))
+        ledger=publication_ledger(self.root,self.profile)
+        if ledger:
+            files.extend(table for p in ledger.glob('*.csv') if (table:=publication_table(ledger,p.name)))
+        review=self.reader/'当前复盘.json'
+        files.append(review)
+        if review.is_file():
+            snapshot=read_json(review).get('snapshot')
+            if snapshot: files.append(self.root/snapshot)
         return [(str(p),p.stat().st_mtime_ns,p.stat().st_size) for p in files if p.exists()]
 
     def ensure_fresh(self):
@@ -199,10 +207,21 @@ class Knowledge:
         return out
 
     def read_topics(self):
-        base=self.root/'90_系统资料/内容生产/AI业务/04_发布与数据/00_统一台账'
+        base=publication_ledger(self.root,self.profile)
         def csvread(n):
-            with (base/n).open(encoding='utf-8-sig',newline='') as f: return list(csv.DictReader(f))
+            table=publication_table(base,n)
+            if table is None: return []
+            with table.open(encoding='utf-8-sig',newline='') as f: return list(csv.DictReader(f))
         pubs=csvread('发布记录.csv'); metrics=csvread('内容表现.csv'); conversions=csvread('业务转化.csv')
+        review_path=self.reader/'当前复盘.json'
+        review=read_json(review_path) if review_path.is_file() else {}
+        snapshot_path=self.root/review.get('snapshot','') if review.get('snapshot') else None
+        snapshot=read_json(snapshot_path) if snapshot_path and snapshot_path.is_file() else {}
+        review_rows=snapshot.get('rows',[]) if snapshot.get('review',{}).get('source_sha256')==review.get('source_sha256') else []
+        by_object={r['object_id']:r for r in review_rows if r.get('object_id')}
+        by_asset={}
+        for row in review_rows:
+            if row.get('asset_id'): by_asset.setdefault(row['asset_id'],[]).append(row)
         result=[]
         for path in (self.root/'03_选题库/选题').glob('*.md'):
             m,b=parse_md(path); work_ids=set(as_list(m.get('source_work_ids')))
@@ -212,13 +231,29 @@ class Knowledge:
             latest={}
             for s in sorted(snapshots,key=lambda x:x.get('captured_at','')): latest[s['publication_id']]=s
             works=[w for w in self.works if w['work_id'] in work_ids or w['id'] in as_list(m.get('source_asset_ids'))]
+            current=None
+            if m.get('current_window_status')=='已匹配':
+                current=by_object.get(m.get('platform_object_id'))
+                if not current:
+                    candidates=[r for aid in as_list(m.get('source_asset_ids')) for r in by_asset.get(aid,[])]
+                    if len(candidates)==1: current=candidates[0]
+            if current:
+                matching_pubs=[p for p in linked_pubs if p.get('asset_id')==current.get('asset_id')]
+                current_id=matching_pubs[0]['publication_id'] if len(matching_pubs)==1 else current['object_id']
+                latest={current_id:{'publication_id':current_id,'captured_at':current.get('captured_at') or review.get('captured_at'),
+                    'views':current.get('播放'),'completion_rate':current.get('完播率'),
+                    'avg_watch_seconds':current.get('平均播放时长'),'follows':current.get('关注'),'title':current.get('title')}}
             conv=[{k:r[k] for k in ('publication_id','product_name','window_start','window_end','content_attributed_orders','content_attributed_revenue','attribution_basis','captured_at')} for r in conversions if r['publication_id'] in pub_ids]
             result.append({'id':m.get('topic_id',path.stem),'title':m.get('title',path.stem),'date':str(m.get('last_validated_at','')),
                 'mechanism':section(b,['可复用机制']),'boundary':section(b,['边界与反例']),
                 'works':[{k:v for k,v in w.items() if k!='path'} for w in works],
                 'node_ids':list(dict.fromkeys(n for w in works for n in w['node_ids'])),
                 'metrics':[{k:r.get(k) or None for k in ('publication_id','captured_at','views','completion_rate','avg_watch_seconds','follows','title')} for r in latest.values()],
-                'conversions':conv,'uri':self.uri(path),'score_state':'历史评分口径待统一'})
+                'conversions':conv,'uri':self.uri(path),
+                'selection_status':m.get('selection_status') or m.get('status',''),
+                'score_state':('当前复盘 · '+str(review.get('ranking_rule','')) if current else '历史评分口径待统一'),
+                'score_rank':current.get('综合排名') if current else None,
+                'score':current.get('综合评分') if current else None})
         for topic in result:topic['summary']=topic_summary(topic['metrics'],topic['conversions'])
         return result
 
@@ -288,6 +323,10 @@ class Knowledge:
                 'node_ids':[x for x in r['related_ids'] if x in self.nodes],'uri':self.uri(r['path'])})
         return {'passages':passages,'semantic':result['semantic'],'warnings':result['warnings'],'seconds':result['elapsed_seconds']}
 
+    def question_packet(self,question,mode=None,history=(),node_ids=()):
+        from qa_evidence import packet
+        return packet(self,question,mode,history,node_ids)
+
     def evidence(self,query,node_ids=None):
         found=self.search(query)
         ids=list(dict.fromkeys((node_ids or [])+[n for p in found['passages'] for n in p['node_ids']]))[:10]
@@ -302,7 +341,11 @@ class Knowledge:
         return found
 
     def verify_evidence(self,evidence):
+        current=self.sources
+        if getattr(self,'rargs',None) and evidence.get('schema')=='personal-qa-v1':
+            current={r['source_id']:r for r in read_json(self.profile['retrieval']['manifest'])['sources']
+                     if r.get('index',True) and self.retrieval.source_allowed(r,self.profile,self.root)[0]}
         for passage in evidence.get('passages',[]):
-            source=self.sources.get(passage['source_id'])
+            source=current.get(passage['source_id'])
             if not source or not passage.get('source_hash') or sha(Path(source['path']).read_bytes())!=passage['source_hash']:
                 raise ValueError('引用原文已变化或缺少版本核验，请重新分析方向再写作。')
